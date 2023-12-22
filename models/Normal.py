@@ -11,7 +11,8 @@ from utils import pad_sequences, TriLinearSimilarity
 import time
 import os
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # 下面老是报错 shape 不一致
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 
 class Dot_Product_Attention(nn.Module):
     """
@@ -75,8 +76,6 @@ class Cosine_Similarity_Attention(nn.Module):
         query = self.WQ(query)  
         key = self.WK(key)
         value = self.WV(value)
-
-        # scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.hidden_dim)
         scores = F.cosine_similarity(query, key, dim=-1)
         scores = scores.squeeze()
         if mask is not None:
@@ -90,7 +89,7 @@ class Cosine_Similarity_Attention(nn.Module):
         return torch.matmul(p_attn, value), p_attn
 
 
-class AttentionUpdateGateGRUCell(nn.Module):
+class AttentionUpdateGateGRUCell(nn.Module):  # Not used
     def __init__(self, input_size, hidden_size, bias=True):
         super().__init__()
         self.input_size = input_size
@@ -150,7 +149,7 @@ class HyperConv(nn.Module):
             item_embeddings = torch.sparse.mm(adjacency.to(device), item_embeddings)
             final.append(item_embeddings)
         final = torch.stack(final)
-        item_embeddings = torch.sum(final, 0) / (self.layers + 1)  # 最终把每一层的ebd结果取平均，就是最终的结果. 这个不加效果很差
+        item_embeddings = torch.sum(final, 0) / (self.layers + 1)  # 最终把每一层的ebd结果取平均
         item_embeddings = torch.cat((torch.zeros(self.hidden_dim).view(1, -1).to(device), item_embeddings), dim=0)
         return item_embeddings  # (node_num + 1, ebd_dim)
 
@@ -210,7 +209,7 @@ class self_attention(nn.Module):
         return att_v, alpha
     
     
-class self_attention2(nn.Module):
+class self_attention2(nn.Module):   # Not used
     def __init__(self, dim, is_dropout=False, activate='relu'):
         super().__init__()
         self.is_dropout = is_dropout
@@ -378,7 +377,7 @@ class HICN(nn.Module):
         self.Entmax_Other = self_attention2(self.hidden_dim, True)
 
     def Update_Item_Embedding(self):
-        return self.HGNN(self.adj, self.ItemEmbedding.weight[1:])  # 原始HGNN
+        return self.HGNN(self.adj, self.ItemEmbedding.weight[1:])  # 原始HGCN
 
     def init_parameters(self):
         stdv = 1.0 / math.sqrt(self.hidden_dim)
@@ -465,7 +464,7 @@ class HICN(nn.Module):
                                                                                    self.hidden_dim)  # B, sample_num, d
         return A
 
-    def get_session_info_batch(self, batch_item, E):
+    def get_session_info_batch(self, batch_item, E):   # Not used
         # batch_item: B, max_len
         ses = self.smp[batch_item.long() - 1].reshape(-1, self.sample_num)  # B * max_len, sample_num
         map_ses = self.pad_session[ses]  # B * max_len, sample_num, max_len
@@ -488,7 +487,7 @@ class HICN(nn.Module):
         smp = torch.LongTensor(smp)
         return smp
 
-    def get_other_session(self, session_item):
+    def get_other_session(self, session_item):   # Not used
         '''
         :param session_item: 9w * d (all_session_num, d)
         :return:
@@ -543,13 +542,13 @@ class HICN(nn.Module):
         rdd = torch.rand(self.batch_size, self.max_len)
         judge = (rdd >= self.reduce_func).to(device)
         judge |= mask
-        CUR = cur_row_ebd + log_feats #+ nei_rdd   # None, L, d
-        CUR = self.LN(CUR)  # LN if Tmall, BN if TaoBaoBuy
+        CUR = cur_row_ebd + log_feats   # None, L, d
+        CUR = self.LN(CUR)
         cur_final = torch.tanh(self.MLP2(torch.cat([CUR, PE_cur], dim=-1)))  # (None, L, d)
         cur_final = cur_final * cur_mask  # (None, L, d)
 
         Es = self.get_soft_attention(cur, cur_final, cur_mask)  # None, d 即 B, d
-        label_ebd = EE[cur[:, -1].long()] # B, 1, d
+        label_ebd = EE[cur[:, -1].long()]  # B, 1, d
         Q = self.Attn_Q_Ln(label_ebd.unsqueeze(1)).transpose(0, 1)
         K = self.Attn_K_Ln(cur_nei_ebd + PE_cur).transpose(0, 1)
         V = cur_nei_ebd.transpose(0, 1)

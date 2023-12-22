@@ -6,12 +6,13 @@ import torch.nn.functional as F
 import math
 import datetime
 import numpy as np
-from entmax import  entmax_bisect
+from entmax import entmax_bisect
 from utils import pad_sequences, TriLinearSimilarity
 import time
 import os
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # 下面老是报错 shape 不一致
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 
 class Dot_Product_Attention(nn.Module):
     """
@@ -34,7 +35,7 @@ class Dot_Product_Attention(nn.Module):
             weight.data.normal_(0, stdv)
 
     def forward(self, query, key, value, mask=None, dropout=None):
-        query = self.WQ(query)  
+        query = self.WQ(query)
         key = self.WK(key)
         value = self.WV(value)
 
@@ -49,11 +50,11 @@ class Dot_Product_Attention(nn.Module):
             p_attn = dropout(p_attn)
 
         return torch.matmul(p_attn, value), p_attn
-    
-    
+
+
 class Cosine_Similarity_Attention(nn.Module):
     """
-    缩放点积注意力。
+    余弦注意力。
     mask为true的地方需要mask.
     返回结果和attn score
     """
@@ -72,7 +73,7 @@ class Cosine_Similarity_Attention(nn.Module):
             weight.data.normal_(0, stdv)
 
     def forward(self, query, key, value, mask=None, dropout=None):
-        query = self.WQ(query)  
+        query = self.WQ(query)
         key = self.WK(key)
         value = self.WV(value)
 
@@ -89,7 +90,7 @@ class Cosine_Similarity_Attention(nn.Module):
         return torch.matmul(p_attn, value), p_attn
 
 
-class AttentionUpdateGateGRUCell(nn.Module):
+class AttentionUpdateGateGRUCell(nn.Module):   # Not used
     def __init__(self, input_size, hidden_size, bias=True):
         super().__init__()
         self.input_size = input_size
@@ -185,11 +186,11 @@ class self_attention(nn.Module):
         elif activate == 'selu':
             self.activate = F.selu
         self.attention_mlp = nn.Linear(dim, dim)
-        
+
         self.self_atten_w1 = nn.Linear(dim, dim)
         self.self_atten_w2 = nn.Linear(dim, dim)
         self.LN = nn.LayerNorm(dim)
-        
+
     def forward(self, q, k, v, mask=None, alpha_ent=2):  # 1 for softmax
         if self.is_dropout:
             q_ = self.dropout(self.activate(self.attention_mlp(q)))
@@ -199,7 +200,7 @@ class self_attention(nn.Module):
         if mask is not None:
             mask = mask.unsqueeze(1).expand(-1, q.size(1), -1)
             assert mask.shape == scores.shape
-            scores = torch.where(mask, torch.ones_like(scores) * -1e15, scores) 
+            scores = torch.where(mask, torch.ones_like(scores) * -1e15, scores)
         alpha = entmax_bisect(scores, alpha_ent, dim=-1)
         att_v = torch.matmul(alpha, v)  # B, 1, L * B, L, d
         if self.is_dropout:
@@ -208,8 +209,8 @@ class self_attention(nn.Module):
             att_v = self.self_atten_w2(self.activate(self.self_atten_w1(att_v))) + att_v
         att_v = self.LN(att_v)
         return att_v, alpha
-    
-    
+
+
 class HICN(nn.Module):
     def __init__(self, dataset, item_num, max_len, hidden_dim, lr, num_heads, nei_num, nei_info,
                  batch_size, all_session, item_session_dict, sample_num, layer_num, adj, hyperedge_index,
@@ -289,7 +290,7 @@ class HICN(nn.Module):
         self.Neighbour_Attn = Dot_Product_Attention(self.hidden_dim)
         self.Nei_Attn_Q_Ln = nn.LayerNorm(self.hidden_dim)
         self.Nei_Attn_K_Ln = nn.LayerNorm(self.hidden_dim)
-        # 以下是session内的AUGRU
+        # 以下是session内的AUGRU, 最终未采用
         self.Session_AUGRU = AttentionUpdateGateGRUCell(self.hidden_dim, self.hidden_dim)
         # 对于所有item邻居的attention
         self.Ns_Attn = nn.MultiheadAttention(hidden_dim, 4)
@@ -306,12 +307,12 @@ class HICN(nn.Module):
         # 以下是自注意力的entmax
         self.entmax_attention = self_attention(self.hidden_dim, True)
         self.entmax_last = self_attention(self.hidden_dim, True)
-         # 衰减函数
+        # 衰减函数
         self.reduce_func = 1 / torch.arange(self.max_len, 0, -1)
         # self.reduce_func = torch.exp(-torch.arange(self.max_len - 1, -1, -1) * 0.5)
 
     def Update_Item_Embedding(self):
-        return self.HGNN(self.adj, self.ItemEmbedding.weight[1:])  # 原始HGNN
+        return self.HGNN(self.adj, self.ItemEmbedding.weight[1:])  # HGCN
 
     def init_parameters(self):
         stdv = 1.0 / math.sqrt(self.hidden_dim)
@@ -388,7 +389,7 @@ class HICN(nn.Module):
 
         V = torch.bmm(self.W2(torch.tanh(self.W1(X))).transpose(-1, -2), X)  # None, num_heads, d
         res = torch.max(V, dim=1)[0]
-        return res, V  # , Diag_SUM
+        return res, V
 
     def get_last_session_info_batch(self, last_item, E):
         last_item = last_item.to('cpu')
@@ -397,18 +398,19 @@ class HICN(nn.Module):
         A = self.get_session_info(map_ses.reshape(-1, self.max_len), E)[0].reshape(-1, self.sample_num,
                                                                                    self.hidden_dim)  # B, sample_num, d
         return A
-    
-    def get_last_session_info_batch_soft(self, last_item, E):
+
+    def get_last_session_info_batch_soft(self, last_item, E):  # Not used
         # print(last_item.shape)  B
         ses = self.smp[last_item.long() - 1]  # B, sample_num
-        map_ses = self.pad_session[ses].reshape(-1, self.max_len).to(device)  # B, sample_num, max_len  -> B * sample_num, max_len
+        map_ses = self.pad_session[ses].reshape(-1, self.max_len).to(
+            device)  # B, sample_num, max_len  -> B * sample_num, max_len
         map_ses_ebd = E[map_ses]  # B * sample_num, max_len, d
         msk = (map_ses.reshape(-1, self.max_len) != 0).unsqueeze(-1).to(device)
         A = self.get_soft_attention(map_ses, map_ses_ebd, msk).reshape(-1, self.sample_num,
-                                                                                   self.hidden_dim)  # B, sample_num, d
+                                                                       self.hidden_dim)  # B, sample_num, d
         return A
 
-    def get_session_info_batch(self, batch_item, E):
+    def get_session_info_batch(self, batch_item, E):  # Not used
         # batch_item: B, max_len
         ses = self.smp[batch_item.long() - 1].reshape(-1, self.sample_num)  # B * max_len, sample_num
         map_ses = self.pad_session[ses]  # B * max_len, sample_num, max_len
@@ -430,7 +432,7 @@ class HICN(nn.Module):
         smp = torch.LongTensor(smp)
         return smp
 
-    def get_other_session(self, session_item):
+    def get_other_session(self, session_item):  # Not used
         smp = self.smp  # item_num, sample_num
         tmp = session_item[smp]  # item_num, sample_num, d
         sum = torch.sum(tmp, dim=1, keepdims=False)  # item_num, d
@@ -440,8 +442,9 @@ class HICN(nn.Module):
 
     def forward(self, cur, mask, id, EE, label=None):  # 得到组合后的item ebd
         # 首先得到融合信息之后的item_ebd.
-        cur_mask = torch.where(cur != 0, torch.ones_like(cur), torch.zeros_like(cur)).squeeze().unsqueeze(-1)  # (None, L, 1)
-        mask = mask.squeeze()  # for Retail Rocket
+        cur_mask = torch.where(cur != 0, torch.ones_like(cur), torch.zeros_like(cur)).squeeze().unsqueeze(
+            -1)  # (None, L, 1)
+        mask = mask.squeeze()
         positions_cur = np.tile(np.array(range(self.max_len - 1, -1, -1)), [self.batch_size, 1])  # (None, L)
         PE_cur = self.PositionEmbedding(torch.LongTensor(positions_cur).to(device))  # (None, L, d)
 
@@ -453,38 +456,38 @@ class HICN(nn.Module):
         cur_info = cur_info.repeat(1, self.max_len, 1)  # None, L, d
         cur_row_ebd = EE[cur.long()]  # B, L, d
 
-        # 以下添加self-attention
+        # self-attention
         seqs = EE[cur.long()]  # B, L, d
         # pos: [B, L]
         seqs += PE_cur
         seqs *= cur_mask
-        Q = seqs # self.attention_layernorms[0](seqs)
+        Q = seqs  # self.attention_layernorms[0](seqs)
         log_feats, _ = self.entmax_attention(Q, seqs, seqs, mask, alpha_ent=2)
         cur_nei_ebd = nei_ebd[cur.long()]  # None, L, d
-    
+
         rdd = torch.rand(self.batch_size, self.max_len)
         judge = (rdd >= self.reduce_func).to(device)
         judge |= mask
         lst_rh = self.get_last_session_info_batch(cur[:, -1], EE)  # B, sample_num, d
 
-        CUR = cur_row_ebd + log_feats   # None, L, d
+        CUR = cur_row_ebd + log_feats  # None, L, d
         CUR = self.LN(CUR)
         cur_final = torch.tanh(self.MLP2(torch.cat([CUR, PE_cur], dim=-1)))  # (None, L, d)
         cur_final = cur_final * cur_mask  # (None, L, d)
 
-        Es = self.get_soft_attention(cur, cur_final, cur_mask)  # None, d 即 B, d
+        Es = self.get_soft_attention(cur, cur_final, cur_mask)  # None, d, B, d
 
         lst = cur_row_ebd[:, -1, :].unsqueeze(1)  # B, 1, d
         lst_nei = cur_nei_ebd[:, -1, :]  # B, d
-        
+
         if label is not None:
-            label_ebd = EE[label] # B, 1, d
+            label_ebd = EE[label]  # B, 1, d
             Q = self.Attn_Q_Ln(label_ebd.unsqueeze(1)).transpose(0, 1)
             K = self.Attn_K_Ln(cur_nei_ebd + PE_cur).transpose(0, 1)
             V = cur_nei_ebd.transpose(0, 1)
             tmpp = self.Ns_Attn(Q, K, V, judge)
             Ns = tmpp[0].squeeze()
-            
+
         Tri_sim = TriLinearSimilarity(self.hidden_dim, torch.nn.Sigmoid())
         sim = Tri_sim(Vs.unsqueeze(1).repeat(1, self.sample_num, 1), lst_rh)  # B, sample_num
         tar = torch.argmax(sim, dim=-1)  # B
@@ -493,7 +496,7 @@ class HICN(nn.Module):
         for _ in range(self.batch_size):
             Os.append(lst_rh[_, tar[_], :] * (sim[_, tar[_]] if sim[_, tar[_]] > 0.5 else 0))
         Os = torch.stack(Os, dim=0)
-       
+
         beta = torch.relu(self.Gate(torch.cat([Es, Os], dim=-1)))
         if label is not None:
             res = Es + Vs + Ns + 0.3 * beta * Os
@@ -515,35 +518,29 @@ def train_test(model, train_loader, test_loader, item_num, f, epoch, dataset):
         ss = time.time()
         if break_flag:
             break
-        # cur, label, mask, user = xx
         cur, label, mask = xx
         if use_gnn:
-            EE = model.Update_Item_Embedding()  # 为了测试GNN是不是有用，这里消融
+            EE = model.Update_Item_Embedding()
         else:
             EE = model.ItemEmbedding.weight
         '''
         his: B, max_his_len, max_len
         cur: B, 1, max_len
-        user: B
         label: B
         '''
         cur = cur.to(device)
         label = label.to(device)
         mask = mask.to(device)
-        # user = user.to(device)
-        # print(time.time() - ss)
         model.zero_grad()
         final_ebd = model(cur, mask, ii, EE, label)
-        # print(time.time() - ss)
         if model.dataset == 'Tmall':
             item_ebd = model.ItemEmbedding.weight.detach()
         else:
             item_ebd = EE
-        scores = torch.mm(final_ebd, torch.transpose(item_ebd, 1, 0))  # 这里算scores的时候用wei还是用EE?
+        scores = torch.mm(final_ebd, torch.transpose(item_ebd, 1, 0))  # Here is the tips we discussed (4.16).
         loss = model.loss_function(scores + 1e-8, label.long().to(device))
         loss.backward()
         model.optimizer.step()
-        # print(time.time() - ss)
         total_loss += loss
         if ii % 1000 == 0:
             now = time.time()
