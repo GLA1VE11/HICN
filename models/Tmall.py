@@ -342,7 +342,7 @@ class HICN(nn.Module):
 
         return torch.bmm(attn, Xn).squeeze()
 
-    def get_soft_attention(self, row_session, session, mask):
+    def get_soft_attention(self, row_session, session, mask):  # Here 'session' means Gs.
         """
         :param row_session: (None, L)
         :param session: (None, L, d)
@@ -440,8 +440,7 @@ class HICN(nn.Module):
         sum = torch.cat([torch.zeros(1, self.hidden_dim).to(device), sum], dim=0)
         return sum
 
-    def forward(self, cur, mask, id, EE, label=None):  # 得到组合后的item ebd
-        # 首先得到融合信息之后的item_ebd.
+    def forward(self, cur, mask, id, EE, label=None):  # Here EE means the original embedding matrix.
         cur_mask = torch.where(cur != 0, torch.ones_like(cur), torch.zeros_like(cur)).squeeze().unsqueeze(
             -1)  # (None, L, 1)
         mask = mask.squeeze()
@@ -451,10 +450,10 @@ class HICN(nn.Module):
         nei_ebd = self.get_neighbors(EE)
         nei_ebd = torch.cat([torch.zeros(1, self.hidden_dim).to(device), nei_ebd], dim=0)
         cur = cur.reshape(-1, self.max_len)  # B, max_len
-        Vs, V = self.get_session_info(cur, EE)  # None, d
-        cur_info = Vs.unsqueeze(1)
-        cur_info = cur_info.repeat(1, self.max_len, 1)  # None, L, d
-        cur_row_ebd = EE[cur.long()]  # B, L, d
+        v_s, V = self.get_session_info(cur, EE)  # None, d
+        cur_info = v_s.unsqueeze(1)
+        cur_info = cur_info.repeat(1, self.max_len, 1)  # None, L, d, not used
+        Es = EE[cur.long()]  # B, L, d
 
         # self-attention
         seqs = EE[cur.long()]  # B, L, d
@@ -462,7 +461,7 @@ class HICN(nn.Module):
         seqs += PE_cur
         seqs *= cur_mask
         Q = seqs  # self.attention_layernorms[0](seqs)
-        log_feats, _ = self.entmax_attention(Q, seqs, seqs, mask, alpha_ent=2)
+        Es_prime, _ = self.entmax_attention(Q, seqs, seqs, mask, alpha_ent=2)
         cur_nei_ebd = nei_ebd[cur.long()]  # None, L, d
 
         rdd = torch.rand(self.batch_size, self.max_len)
@@ -470,15 +469,15 @@ class HICN(nn.Module):
         judge |= mask
         lst_rh = self.get_last_session_info_batch(cur[:, -1], EE)  # B, sample_num, d
 
-        CUR = cur_row_ebd + log_feats  # None, L, d
-        CUR = self.LN(CUR)
-        cur_final = torch.tanh(self.MLP2(torch.cat([CUR, PE_cur], dim=-1)))  # (None, L, d)
-        cur_final = cur_final * cur_mask  # (None, L, d)
+        Gs = Es + Es_prime  # None, L, d
+        Gs = self.LN(Gs)
+        cur_final = torch.tanh(self.MLP2(torch.cat([Gs, PE_cur], dim=-1)))  # (None, L, d)
+        cur_final = cur_final * cur_mask  # (None, L, d) . Here 'cur_final' is the 'Gs' is paper.
 
-        Es = self.get_soft_attention(cur, cur_final, cur_mask)  # None, d, B, d
+        e_s = self.get_soft_attention(cur, cur_final, cur_mask)  # None, d, B, d
 
-        lst = cur_row_ebd[:, -1, :].unsqueeze(1)  # B, 1, d
-        lst_nei = cur_nei_ebd[:, -1, :]  # B, d
+        lst = Es[:, -1, :].unsqueeze(1)  # B, 1, d, not used
+        lst_nei = cur_nei_ebd[:, -1, :]  # B, d, not used
 
         if label is not None:
             label_ebd = EE[label]  # B, 1, d
@@ -486,22 +485,22 @@ class HICN(nn.Module):
             K = self.Attn_K_Ln(cur_nei_ebd + PE_cur).transpose(0, 1)
             V = cur_nei_ebd.transpose(0, 1)
             tmpp = self.Ns_Attn(Q, K, V, judge)
-            Ns = tmpp[0].squeeze()
+            n_s = tmpp[0].squeeze()
 
         Tri_sim = TriLinearSimilarity(self.hidden_dim, torch.nn.Sigmoid())
-        sim = Tri_sim(Vs.unsqueeze(1).repeat(1, self.sample_num, 1), lst_rh)  # B, sample_num
+        sim = Tri_sim(v_s.unsqueeze(1).repeat(1, self.sample_num, 1), lst_rh)  # B, sample_num
         tar = torch.argmax(sim, dim=-1)  # B
 
-        Os = []
+        o_s = []
         for _ in range(self.batch_size):
-            Os.append(lst_rh[_, tar[_], :] * (sim[_, tar[_]] if sim[_, tar[_]] > 0.5 else 0))
-        Os = torch.stack(Os, dim=0)
+            o_s.append(lst_rh[_, tar[_], :] * (sim[_, tar[_]] if sim[_, tar[_]] > 0.5 else 0))
+        o_s = torch.stack(o_s, dim=0)
 
-        beta = torch.relu(self.Gate(torch.cat([Es, Os], dim=-1)))
+        beta = torch.relu(self.Gate(torch.cat([e_s, o_s], dim=-1)))
         if label is not None:
-            res = Es + Vs + Ns + 0.3 * beta * Os
+            res = e_s + v_s + n_s + 0.3 * beta * o_s
         else:
-            res = Es + Vs + 0.3 * beta * Os
+            res = e_s + v_s + 0.3 * beta * o_s
         return self.Dropout(res)
 
 
