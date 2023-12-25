@@ -568,7 +568,7 @@ class HICN(nn.Module):
         beta = torch.relu(self.Gate(torch.cat([v_s, o_s], dim=-1)))
 
         if label is not None:
-            res = e_s + v_s + n_s + 0.5 * beta * o_s
+            res = e_s + v_s + n_s + 0.5 * beta * o_s   # or use MLP
         else:
             res = e_s + v_s + n_s + 0.5 * beta * o_s
         return self.Dropout(res)
