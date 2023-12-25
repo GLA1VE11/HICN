@@ -496,9 +496,9 @@ class HICN(nn.Module):
             o_s.append(lst_rh[_, tar[_], :] * (sim[_, tar[_]] if sim[_, tar[_]] > 0.5 else 0))
         o_s = torch.stack(o_s, dim=0)
 
-        beta = torch.relu(self.Gate(torch.cat([e_s, o_s], dim=-1)))
+        beta = torch.relu(self.Gate(torch.cat([e_s, o_s], dim=-1)))  # or torch.cat([v_s, o_s], dim=-1), the effect is more or less the same.
         if label is not None:
-            res = e_s + v_s + n_s + 0.3 * beta * o_s
+            res = e_s + v_s + n_s + 0.3 * beta * o_s  # or use MLP
         else:
             res = e_s + v_s + 0.3 * beta * o_s
         return self.Dropout(res)
